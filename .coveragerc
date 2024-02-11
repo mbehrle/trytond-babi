@@ -1,0 +1,5 @@
+[run]
+source = trytond.modules.babi
+
+[report]
+omit = */tests/*,*/setup.py
