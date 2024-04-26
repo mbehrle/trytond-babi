@@ -137,11 +137,11 @@ class Table(DeactivableMixin, ModelSQL, ModelView):
             ('no-records', 'No Records Found'),
             ('always', 'Always'),
             ], 'Warn')
-    email_template = fields.Many2One('electronic.mail.template',
-        'Email Template', domain=[('model.model', '=', 'babi.warning')],
-        states={
-            'invisible': ~Bool(Eval('warn')),
-            })
+    #email_template = fields.Many2One('electronic.mail.template',
+    #    'Email Template', domain=[('model.model', '=', 'babi.warning')],
+    #    states={
+    #        'invisible': ~Bool(Eval('warn')),
+    #        })
     warning_description = fields.Text('Description', states={
             'invisible': ~Bool(Eval('warn')),
             })
@@ -1084,6 +1084,7 @@ class Warning(Workflow, ModelSQL, ModelView):
             }
 
     def send(self):
-        if self.table.warn and self.table.email_template:
-            self.table.email_template.render_and_send(
-                self.table.email_template.id, [self.table.email_template])
+        pass
+    #    if self.table.warn and self.table.email_template:
+    #        self.table.email_template.render_and_send(
+    #            self.table.email_template.id, [self.table.email_template])
