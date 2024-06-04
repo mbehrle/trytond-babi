@@ -150,7 +150,7 @@ class Table(DeactivableMixin, ModelSQL, ModelView):
             'invisible': ~Bool(Eval('warn')),
             })
     calculation_time = fields.Float('Time taken to calculate (in seconds)',
-        readonly=True, states={
+        digits=(16, 6), readonly=True, states={
             'invisible': ~Bool(Eval('warn')),
             })
     last_warning_execution = fields.DateTime('Last Warning Execution',
@@ -585,7 +585,8 @@ class Table(DeactivableMixin, ModelSQL, ModelView):
         self.save()
         notify(gettext('babi.msg_table_successful', table=self.rec_name))
         self.calculation_date = datetime.now()
-        self.calculation_time = end_time - start_time
+        self.calculation_time = round(end_time - start_time,
+            self.__class__.calculation_time.digits[1])
         self.save()
         if compute_warnings:
             self.__queue__.compute_warnings()
@@ -599,7 +600,7 @@ class Table(DeactivableMixin, ModelSQL, ModelView):
             if self.user_field:
                 user_id = self.user_field.internal_name
             elif self.user:
-                user_id = str(self.user.id)
+                user_id = self.user.id
             else:
                 user_id = 'NULL'
 
@@ -607,7 +608,7 @@ class Table(DeactivableMixin, ModelSQL, ModelView):
             if self.employee_field:
                 employee_id = self.employee_field.internal_name
             elif self.employee:
-                employee_id = str(self.employee.id)
+                employee_id = self.employee.id
             else:
                 employee_id = 'NULL'
 
@@ -615,7 +616,7 @@ class Table(DeactivableMixin, ModelSQL, ModelView):
             if self.company_field:
                 company_id = self.company_field.internal_name
             elif self.company:
-                company_id = str(self.company.id)
+                company_id = self.company.id
             else:
                 company_id = 'NULL'
 
@@ -627,7 +628,8 @@ class Table(DeactivableMixin, ModelSQL, ModelView):
             query_full += 'FROM (%s) AS compute_warnings_subquery ' % query
 
             group_by = [user_id, employee_id, company_id]
-            group_by = [x for x in group_by if x != 'NULL']
+            group_by = [x for x in group_by
+                if isinstance(x, str) and x != 'NULL']
             if group_by:
                 query_full += 'GROUP BY ' + ', '.join(group_by)
 
@@ -959,8 +961,19 @@ class Warning(Workflow, ModelSQL, ModelView):
             ondelete='CASCADE')
     group = fields.Many2One('res.group', 'Group', ondelete='CASCADE',
             readonly=True)
-    done_by = employee_field("Done By", states=['done', 'ignored'])
-    ignored_by = employee_field("Ignored By", states=['done', 'ignored'])
+    users = fields.Function(fields.Many2Many('res.user', None, None, 'Users'),
+        'get_users')
+    emails = fields.Function(fields.Char('E-mails'), 'get_emails')
+    done_by = employee_field("Done By", states=['pending', 'done', 'ignored'])
+    ignored_by = employee_field("Ignored By",
+        states=['pending', 'done', 'ignored'])
+
+    def get_rec_name(self, name):
+        return f'{self.count} - {self.table.name}'
+
+    @classmethod
+    def search_rec_name(cls, name, clause):
+        return [('table.name',) + tuple(clause[1:])]
 
     @classmethod
     def __setup__(cls):
@@ -995,10 +1008,51 @@ class Warning(Workflow, ModelSQL, ModelView):
                     },
                 })
 
+    @staticmethod
+    def default_state():
+        return 'pending'
+
     def get_has_related_records(self, name):
         if not self.table.related_field:
             return False
         return bool(self.count)
+
+    def get_users(self, name):
+        pool = Pool()
+        User = pool.get('res.user')
+
+        if self.user:
+            return [self.user]
+        if self.employee:
+            return User.search([
+                    ('employee.id', '=', self.employee.id),
+                    ])
+        if self.group:
+            return [x for x in self.group.users if x.active]
+        if self.company:
+            return User.search([
+                    ('companies.id', '=', self.company.id),
+                    ])
+        return User.search([])
+
+    def get_emails(self, name):
+        User = Pool().get('res.user')
+
+        emails = []
+        if self.user:
+            emails = [self.user.email]
+        elif self.employee:
+            emails = [self.employee.party.email]
+        elif self.group:
+            users = User.search([('groups.id', '=', self.group.id)])
+            emails = [user.email for user in users]
+        elif self.company:
+            users = User.search([('companies.id', '=', self.company.id)])
+            emails = [user.email for user in users]
+        else:
+            users = User.search([])
+            emails = [user.email for user in users]
+        return ', '.join(sorted(list({x for x in emails if x})))
 
     @classmethod
     @ModelView.button
@@ -1020,10 +1074,6 @@ class Warning(Workflow, ModelSQL, ModelView):
     @set_employee('ignored_by')
     def ignore(cls, warnings):
         pass
-
-    @staticmethod
-    def default_state():
-        return 'pending'
 
     def get_description(self, name):
         return self.table.warning_description
@@ -1057,10 +1107,20 @@ class Warning(Workflow, ModelSQL, ModelView):
                 records = [x for x in records if x[user_index] == warning.user.id]
 
         try:
-            ids = list(set([int(x[0]) for x in records if not x[0] is None]))
+            ids = []
+            for record in records:
+                value = record[0]
+                if value is None:
+                    continue
+                # Allow using arrays (using array_agg) of ids or
+                # just ids
+                if isinstance(value, (tuple, list)):
+                    ids += list([int(x) for x in value])
+                else:
+                    ids.append(int(value))
         except:
             raise UserError(gettext('babi.msg_not_converted',
-            field=warning.table.related_field.rec_name))
+                field=warning.table.related_field.rec_name))
 
         Model = pool.get(warning.table.related_model.model)
 
@@ -1075,16 +1135,15 @@ class Warning(Workflow, ModelSQL, ModelView):
         return {
             'res_model': warning.table.related_model.model,
             'type': 'ir.action.act_window',
-            'res_id': ids,
             'name': warning.table.related_model.name,
-            'pyson_domain': '[]',
-            'pyson_context': '[]',
+            'pyson_domain': f'[["id", "in", {ids}]]',
+            'pyson_context': '{}',
             'pyson_order': '[]',
             'domains': [],
             }
 
     def send(self):
         pass
-    #    if self.table.warn and self.table.email_template:
-    #        self.table.email_template.render_and_send(
-    #            self.table.email_template.id, [self.table.email_template])
+        #if self.table.warn and self.table.email_template:
+        #    self.table.email_template.render_and_send(
+        #        self.table.email_template.id, [self])

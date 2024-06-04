@@ -186,19 +186,19 @@ class BabiTestCase(BabiCompanyTestMixin, ModuleTestCase):
                 total_amount += record.amount
                 total_amount_this_month += (record.amount
                     if record.date >= today - relativedelta(days=today.day - 1)
-                    else Decimal(0.0))
+                    else Decimal(0))
                 if record.category == 'odd':
                     odd_amount += record.amount
                     odd_amount_this_month += (record.amount
                         if record.date >= today - relativedelta(days=today.day
                             - 1)
-                        else Decimal(0.0))
+                        else Decimal(0))
                 elif record.category == 'even':
                     even_amount += record.amount
                     even_amount_this_month += (record.amount
                         if record.date >= today - relativedelta(days=today.day
                             - 1)
-                        else Decimal(0.0))
+                        else Decimal(0))
 
             self.assertEqual(len(ReportModel.search([])), 3)
             root, = ReportModel.search([('parent', '=', None)])
@@ -590,9 +590,9 @@ class BabiTestCase(BabiCompanyTestMixin, ModuleTestCase):
             DataModel = pool.get(model.model)
 
             keys = [x.internal_name for x in execution.internal_measures]
-            total_amount = dict.fromkeys(keys, Decimal('0.0'))
-            odd_amount = dict.fromkeys(keys, Decimal('0.0'))
-            even_amount = dict.fromkeys(keys, Decimal('0.0'))
+            total_amount = dict.fromkeys(keys, Decimal(0))
+            odd_amount = dict.fromkeys(keys, Decimal(0))
+            even_amount = dict.fromkeys(keys, Decimal(0))
             for record in DataModel.search([]):
                 all_key = '%s__all__%s' % (month.internal_name,
                     amount.internal_name)
@@ -758,14 +758,14 @@ class BabiTestCase(BabiCompanyTestMixin, ModuleTestCase):
         table.query = 'SELECT amount, category FROM babi_test'
         table.save()
         table._compute()
-        fields = [x.internal_name for x in table.fields_]
+        fields = sorted([x.internal_name for x in table.fields_])
         self.assertEqual(fields, ['amount', 'category'])
 
         table.query = 'SELECT date, amount FROM babi_test'
         table.save()
         table._compute()
-        fields = [x.internal_name for x in table.fields_]
-        self.assertEqual(fields, ['date', 'amount'])
+        fields = sorted([x.internal_name for x in table.fields_])
+        self.assertEqual(fields, ['amount', 'date'])
 
 
 del ModuleTestCase
