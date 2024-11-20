@@ -76,6 +76,24 @@ def generate_html_table(records):
     return table
 
 
+class TableUser(ModelSQL):
+    'BABI Table User'
+    __name__ = 'babi.table-res.user'
+    babi_table = fields.Many2One('babi.table', 'Table', required=True,
+        ondelete='CASCADE')
+    user = fields.Many2One('res.user', 'User', required=True,
+        ondelete='CASCADE')
+
+
+class TableGroup(ModelSQL):
+    'BABI Table Group'
+    __name__ = 'babi.table-res.group'
+    babi_table = fields.Many2One('babi.table', 'Table', required=True,
+        ondelete='CASCADE')
+    user = fields.Many2One('res.group', 'Group', required=True,
+        ondelete='CASCADE')
+
+
 class Table(DeactivableMixin, ModelSQL, ModelView):
     'BABI Table'
     __name__ = 'babi.table'
@@ -84,7 +102,7 @@ class Table(DeactivableMixin, ModelSQL, ModelView):
             (None, ''),
             ('model', 'Model'),
             ('table', 'Table'),
-            ('query', 'Query'),
+            ('view', 'View'),
             ], 'Type', required=True)
     internal_name = fields.Char('Internal Name', required=True)
     model = fields.Many2One('ir.model', 'Model', states={
@@ -98,8 +116,8 @@ class Table(DeactivableMixin, ModelSQL, ModelView):
             })
     fields_ = fields.One2Many('babi.field', 'table', 'Fields')
     query = fields.Text('Query', states={
-            'invisible': ~Eval('type').in_(['query', 'table']),
-            })
+            'invisible': ~Eval('type').in_(['table', 'view']),
+            }, depends=['type'])
     timeout = fields.Integer('Timeout', required=True, states={
             'invisible': ~Eval('type').in_(['model', 'table']),
             }, help='If table '
@@ -193,6 +211,11 @@ class Table(DeactivableMixin, ModelSQL, ModelView):
             ], ondelete='SET NULL', states={
             'invisible': Bool(Eval('company')) | ~Bool(Eval('warn')),
             })
+    url = fields.Function(fields.Char('URL'), 'get_url')
+    access_users = fields.Many2Many('babi.table-res.user', 'babi_table', 'user',
+        'Access Users')
+    access_groups = fields.Many2Many('babi.table-res.group', 'babi_table', 'user',
+        'Access Groups')
 
     @staticmethod
     def default_timeout():
@@ -215,6 +238,16 @@ class Table(DeactivableMixin, ModelSQL, ModelView):
                     'invisible': ~Bool(Eval('warn')),
                     },
                 })
+
+    @classmethod
+    def __register__(cls, module_name):
+        super().__register__(module_name)
+        cursor = Transaction().connection.cursor()
+        sql_table = cls.__table__()
+
+        # Migration to 7.2: rename query to view
+        cursor.execute(*sql_table.update([sql_table.type], ['view'],
+                where=sql_table.type == 'query'))
 
     @classmethod
     def view_attributes(cls):
@@ -325,7 +358,7 @@ class Table(DeactivableMixin, ModelSQL, ModelView):
 
     def get_required_by_table_names(self):
         tables = self.search([
-                ('type', 'in', ['table', 'query']),
+                ('type', 'in', ['table', 'view']),
                 ('query', 'ilike', '%' + self.table_name + '%'),
                 ])
         res = set()
@@ -505,7 +538,7 @@ class Table(DeactivableMixin, ModelSQL, ModelView):
         else:
             query += '* '
 
-        if self.type == 'query':
+        if self.type == 'view':
             query += 'FROM (%s) AS a ' % self._stripped_query
         else:
             query += 'FROM %s ' % self.table_name
@@ -527,7 +560,7 @@ class Table(DeactivableMixin, ModelSQL, ModelView):
             limit=None):
         if timeout is None:
             timeout = 10
-        if (self.type != 'query'
+        if (self.type != 'view'
                 and not backend.TableHandler.table_exist(self.table_name)):
             return []
         with Transaction().new_transaction() as transaction:
@@ -566,8 +599,8 @@ class Table(DeactivableMixin, ModelSQL, ModelView):
                 self._compute_model()
             elif self.type == 'table':
                 self._compute_table()
-            elif self.type == 'query':
-                self._compute_query()
+            elif self.type == 'view':
+                self._compute_view()
 
             for dependency in self.required_by:
                 dependency.required_by._compute(processed + [self])
@@ -698,10 +731,18 @@ class Table(DeactivableMixin, ModelSQL, ModelView):
             return ''
 
     def _drop(self):
+        # Given that the type may be changed from view to table and viceversa
+        # we cannot rely on self.type to know if we have to execute DROP TABLE
+        # or DROP VIEW.
         cursor = Transaction().connection.cursor()
         if backend.name != 'postgresql':
             cursor.execute('DROP TABLE IF EXISTS %s' % self.table_name)
+            cursor.execute('DROP VIEW IF EXISTS %s' % self.table_name)
             return
+        # In Postgres, trying to execute DROP VIEW on a TABLE will make
+        # postgres complaint (even with the 'IF EXISTS' clause). And the same
+        # will happen with DROP TABLE on a VIEW. So we must check if it exists
+        # and its type.
         cursor.execute("SELECT table_type FROM information_schema.tables "
             "WHERE table_name=%s AND table_schema='public'", (self.table_name,))
         record = cursor.fetchone()
@@ -712,7 +753,7 @@ class Table(DeactivableMixin, ModelSQL, ModelView):
         else:
             cursor.execute('DROP TABLE IF EXISTS %s CASCADE' % self.table_name)
 
-    def _compute_query(self):
+    def _compute_view(self):
         with Transaction().new_transaction() as transaction:
             cursor = transaction.connection.cursor()
             # We must use a subquery because the _stripped_query may contain a
@@ -729,13 +770,8 @@ class Table(DeactivableMixin, ModelSQL, ModelView):
 
     def _compute_table(self):
         with Transaction().new_transaction() as transaction:
-            cursor = transaction.connection.cursor()
-            if backend.name == 'postgresql':
-                cascade = 'CASCADE'
-            else:
-                cascade = ''
-            cursor.execute('DROP TABLE IF EXISTS "%s" %s;' % (self.table_name, cascade))
             self._drop()
+            cursor = transaction.connection.cursor()
             cursor.execute('CREATE TABLE "%s" AS %s' % (self.table_name,
                     self._stripped_query))
             cursor.execute('SELECT * FROM "%s" LIMIT 1' % self.table_name)
@@ -748,12 +784,7 @@ class Table(DeactivableMixin, ModelSQL, ModelView):
 
         with Transaction().new_transaction() as transaction:
             cursor = transaction.connection.cursor()
-
-            if backend.name == 'postgresql':
-                cascade = 'CASCADE'
-            else:
-                cascade = ''
-            cursor.execute('DROP TABLE IF EXISTS "%s" %s' % (self.table_name, cascade))
+            self._drop()
             fields = []
             for field in self.fields_:
                 fields.append('"%s" %s' % (field.internal_name, field.sql_type()))
@@ -856,7 +887,7 @@ class Field(sequence_ordered(), ModelSQL, ModelView):
     table_type = fields.Function(fields.Selection([
             ('model', 'Model'),
             ('table', 'Table'),
-            ('query', 'Query'),
+            ('view', 'View'),
             ], 'Table Type'), 'on_change_with_table_type')
 
     @fields.depends('expression')
