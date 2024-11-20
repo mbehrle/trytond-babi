@@ -10,7 +10,10 @@ from . import table
 from . import dashboard
 from . import action
 from . import ir
-from . import pivot
+try:
+    from . import pivot
+except ModuleNotFoundError:
+    pass
 
 def register():
     Pool.register(
@@ -53,14 +56,17 @@ def register():
         table.Warning,
         ir.Rule,
     module='babi', type_='model')
-    Pool.register(
-        pivot.Site,
-        pivot.Layout,
-        pivot.Index,
-        pivot.PivotHeader,
-        pivot.PivotTable,
-        pivot.DownloadReport,
-    module='babi', type_='model', depends=['voyager'])
+    try:
+        Pool.register(
+            pivot.Site,
+            pivot.Layout,
+            pivot.Index,
+            pivot.PivotHeader,
+            pivot.PivotTable,
+            pivot.DownloadReport,
+        module='babi', type_='model', depends=['voyager'])
+    except NameError:
+        pass
     Pool.register(
         babi.OpenChart,
         babi.OpenExecution,
