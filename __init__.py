@@ -10,6 +10,7 @@ from . import table
 from . import dashboard
 from . import action
 from . import ir
+from . import pivot
 
 def register():
     Pool.register(
@@ -51,13 +52,15 @@ def register():
         table.TableDependency,
         table.Warning,
         ir.Rule,
+    module='babi', type_='model')
+    Pool.register(
         pivot.Site,
         pivot.Layout,
         pivot.Index,
         pivot.PivotHeader,
         pivot.PivotTable,
         pivot.DownloadReport,
-        module='babi', type_='model')
+    module='babi', type_='model', depends=['voyager'])
     Pool.register(
         babi.OpenChart,
         babi.OpenExecution,
